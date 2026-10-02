@@ -1,0 +1,111 @@
+-- Settings
+local TARGET_NAME = "ChestContainer" -- The exact name of the object to teleport to
+local TARGET_ACTION_TEXT = "open chest" -- Must contain this text in the prompt to be valid
+local WAIT_TIME = 1 -- Seconds to wait between chests
+local TELEPORT_OFFSET = Vector3.new(0, 3, 0) -- Spawn slightly above to prevent glitching
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- Keep track of chests we have already visited in this session to avoid loops
+local blacklistedChests = {}
+
+-- Function to find the SINGLE nearest valid ChestContainer
+local function findNextChest()
+	local character = player.Character
+	if not character then return nil end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+
+	local closestChest = nil
+	local shortestDistance = math.huge
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		-- STRICT FILTER: Object must be named exactly "ChestContainer"
+		if obj.Name == TARGET_NAME then
+			
+			-- Check if we've already collected this specific instance
+			if not table.find(blacklistedChests, obj) then
+				
+				-- Look for the ProximityPrompt
+				local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+				if prompt then
+					-- VALIDATION: The prompt must still say "open chest"
+					local fullPromptText = string.lower(prompt.ObjectText .. " " .. prompt.ActionText)
+					if string.find(fullPromptText, string.lower(TARGET_ACTION_TEXT)) then
+						
+						-- Determine physical position for distance check
+						local targetPart = nil
+						if obj:IsA("BasePart") then
+							targetPart = obj
+						elseif obj:IsA("Model") then
+							targetPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+						end
+
+						if targetPart then
+							local dist = (root.Position - targetPart.Position).Magnitude
+							if dist < shortestDistance then
+								shortestDistance = dist
+								closestChest = {Part = targetPart, Prompt = prompt, Instance = obj}
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return closestChest
+end
+
+-- Function to handle interaction
+local function interact(prompt)
+	if fireproximityprompt then
+		fireproximityprompt(prompt)
+	else
+		warn("fireproximityprompt not supported by this executor.")
+	end
+end
+
+-- Main loop
+local function startChestLoop()
+	print("Chest Hunter Active. Target: " .. TARGET_NAME)
+	
+	while true do
+		local character = player.Character or player.CharacterAdded:Wait()
+		local root = character:WaitForChild("HumanoidRootPart")
+		
+		local chestData = findNextChest()
+		
+		if chestData then
+			local targetPart = chestData.Part
+			local targetPrompt = chestData.Prompt
+			local targetInstance = chestData.Instance
+			
+			print("Valid ChestContainer found: " .. targetInstance.Name .. ". Teleporting...")
+			
+			local success, err = pcall(function()
+				-- Teleport
+				root.CFrame = targetPart.CFrame + TELEPORT_OFFSET
+				task.wait(0.3)
+				
+				-- Interact
+				interact(targetPrompt)
+				
+				-- Immediately blacklist this instance so we don't loop back to it
+				table.insert(blacklistedChests, targetInstance)
+			end)
+
+			if not success then
+				warn("Error during chest interaction: " .. err)
+			end
+			
+			task.wait(WAIT_TIME)
+		else
+			-- No valid chests found, wait longer before searching again to save CPU
+			task.wait(2)
+		end
+	end
+end
+
+-- Start the process
+task.spawn(startChestLoop)
